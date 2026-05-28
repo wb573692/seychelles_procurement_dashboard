@@ -928,7 +928,11 @@ def build(data_dir: Path, out_dir: Path, pretty: bool = False):
     # Normalise organisation names (fuzzy deduplication)
     print("\nNormalising organisation names…")
     if NORMALISE_AVAILABLE:
-        dfs = normalise_all(dfs, log_path=str(data_dir / "org_normalisation_log.csv"))
+        dfs = normalise_all(
+            dfs,
+            org_log=str(data_dir / "org_normalisation_log.csv"),
+            bidder_log=str(data_dir / "bidder_normalisation_log.csv"),
+        )
     else:
         print("  (skipped — normalise_orgs.py not found or thefuzz not installed)")
 

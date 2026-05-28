@@ -1,42 +1,35 @@
 """
-normalise_orgs.py — Organisation Name Normalisation
-=====================================================
-Cleans and deduplicates procuring entity names across all four NTB
-datasets using a two-pass approach:
+normalise_orgs.py — Entity Name Normalisation (Orgs + Bidders)
+==============================================================
+Cleans and deduplicates both procuring entity names (org column)
+and bidder/winner names (winner / bidder_name columns) across all
+four NTB datasets using a two-pass approach:
 
 Pass 1 — Rule-based canonicalisation
-    Apply a lookup table of known abbreviations, typos, and variants
-    to map them to a single canonical form.  Fast and deterministic.
+    Lookup tables of known abbreviations, typos, and variants.
+    Fast, deterministic, highest priority.
 
 Pass 2 — Fuzzy clustering
-    For names that survive Pass 1 without a match, use token-sort
-    ratio (handles word-order differences like "Authority Port Sey."
-    vs "Sey. Port Authority") to cluster near-duplicates.
-    The most frequent name in each cluster becomes the canonical.
+    token_sort_ratio handles word-order differences ("Builder Gopinath"
+    vs "Gopinath Builder") and minor typos ("Builders" vs "Builder").
+    The most frequent name in each cluster becomes canonical.
 
-The result is a mapping dict  {raw_name → canonical_name}  that is
-applied to every DataFrame before charts are built.
-
-A full audit log (raw → canonical, match method, score) is written
-to  data/org_normalisation_log.csv  so you can review and override.
+Audit logs are written to data/ so you can review every decision.
 
 Usage
 -----
-    from normalise_orgs import build_org_mapping, apply_org_mapping
+    from normalise_orgs import normalise_all
 
-    # Build once from all four DataFrames
-    mapping = build_org_mapping([df_awarded, df_minutes, df_eoi, df_adv])
-
-    # Apply to each DataFrame in place
-    for df in [df_awarded, df_minutes, df_eoi, df_adv]:
-        apply_org_mapping(df, mapping)
+    dfs = normalise_all(dfs)   # modifies org + winner columns in place
 
 Tuning
 ------
-    FUZZY_THRESHOLD (default 88) — lower = more aggressive merging.
-    Override mappings live in MANUAL_OVERRIDES at the top of this file.
+    ORG_THRESHOLD    (default 88) — fuzzy threshold for org names
+    BIDDER_THRESHOLD (default 85) — slightly lower; bidder names are messier
+    Add entries to MANUAL_OVERRIDES or BIDDER_OVERRIDES to fix mistakes.
 """
 
+import os
 import re
 import unicodedata
 from collections import Counter
@@ -48,20 +41,19 @@ try:
     FUZZY_AVAILABLE = True
 except ImportError:
     FUZZY_AVAILABLE = False
-    print("  WARNING: thefuzz not installed — fuzzy matching disabled. "
-          "Run: pip install thefuzz python-Levenshtein")
+    print("  WARNING: thefuzz not installed — fuzzy matching disabled.\n"
+          "           Run: pip install thefuzz python-Levenshtein")
 
 # ---------------------------------------------------------------------------
 # Tuning
 # ---------------------------------------------------------------------------
 
-FUZZY_THRESHOLD = 88   # 0–100; raise to merge less, lower to merge more
-MIN_NAME_LENGTH = 4    # ignore very short strings
+ORG_THRESHOLD    = 88
+BIDDER_THRESHOLD = 85
+MIN_NAME_LENGTH  = 4
 
 # ---------------------------------------------------------------------------
-# Manual overrides — highest priority, applied before fuzzy matching.
-# Add entries here whenever the automated clustering gets something wrong.
-# Keys are lowercase-stripped versions of the raw name.
+# Procuring entity overrides
 # ---------------------------------------------------------------------------
 
 MANUAL_OVERRIDES: dict[str, str] = {
@@ -197,7 +189,7 @@ MANUAL_OVERRIDES: dict[str, str] = {
     # Agriculture
     "seychelles agricultural agency":        "Seychelles Agricultural Agency",
     "department of agriculture":             "Seychelles Agricultural Agency",
-    "agriculture department":                "Seychelles Agricultural Agency",
+    "agriculture department":               "Seychelles Agricultural Agency",
 
     # FIU
     "financial intelligence unit":           "Financial Intelligence Unit",
@@ -208,7 +200,7 @@ MANUAL_OVERRIDES: dict[str, str] = {
     "technical section":                     "Technical Section Services",
     "tss":                                   "Technical Section Services",
 
-    # Known typos seen in NTB data
+    # Known typos
     "seychelles land transport agnecy":      "Seychelles Land Transport Agency",
     "seychelles land transport agengy":      "Seychelles Land Transport Agency",
     "seychelles revenue commision":          "Seychelles Revenue Commission",
@@ -225,204 +217,531 @@ MANUAL_OVERRIDES: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1 — Text pre-processing
+# Bidder / winner overrides
+# Covers the most common variants seen in NTB minutes and awarded PDFs.
+# The fuzzy pass handles the long tail automatically.
+# ---------------------------------------------------------------------------
+
+BIDDER_OVERRIDES: dict[str, str] = {
+    # ── Legal suffix normalisation helpers ───────────────────────────────────
+    # (These are applied via _strip_suffix before fuzzy matching,
+    #  so you rarely need to list every "(pty) ltd" variant explicitly.)
+
+    # ── A ────────────────────────────────────────────────────────────────────
+    "abhaye valabhji pty ltd":               "Abhaye Valabhji Pty Ltd",
+    "abhaye valabhji":                       "Abhaye Valabhji Pty Ltd",
+    "ace security services":                 "Ace Security Services",
+    "ace security":                          "Ace Security Services",
+    "active protection services":            "Active Protection Services",
+    "active protection":                     "Active Protection Services",
+    "adams construction":                    "Adams Construction",
+    "adam & son":                            "Adam & Son",
+    "adam and son":                          "Adam & Son",
+    "adc consulting":                        "ADC Consulting",
+    "allied builders (sey) ltd":             "Allied Builders",
+    "allied builders sey ltd":               "Allied Builders",
+    "allied builders":                       "Allied Builders",
+    "all weather builders":                  "All Weather Builders",
+    "all weather builder":                   "All Weather Builders",
+    "allweather builders":                   "All Weather Builders",
+    "amico builders":                        "AMICO Builders",
+    "amico investment":                      "AMICO Builders",
+    "amico":                                 "AMICO Builders",
+    "ascent projects sey pty ltd":           "Ascent Projects",
+    "ascent projects (sey) pty ltd":         "Ascent Projects",
+    "ascent projects sey":                   "Ascent Projects",
+    "ascent project":                        "Ascent Projects",
+    "ascent projects":                       "Ascent Projects",
+    "ascent engineering supplies":           "Ascent Engineering Supplies",
+    "atom engineering":                      "Atom Engineering",
+
+    # ── B ────────────────────────────────────────────────────────────────────
+    "bambino agency":                        "Bambino Agency",
+    "bb services":                           "BB Services",
+    "b & n security":                        "B & N Security",
+    "b and n security":                      "B & N Security",
+    "benoiton construction co. ltd":         "Benoiton Construction",
+    "benoiton construction co ltd":          "Benoiton Construction",
+    "benoiton construction":                 "Benoiton Construction",
+    "birger international":                  "Birger International",
+    "bs construction":                       "BS Construction",
+
+    # ── C ────────────────────────────────────────────────────────────────────
+    "cat security":                          "CAT Security",
+    "cat security services":                 "CAT Security",
+
+    # ── D ────────────────────────────────────────────────────────────────────
+    "ddl builders":                          "DDL Builders",
+    "dean builders":                         "Dean Builders",
+    "des iles environmental solutions":      "Des Iles Environmental Solutions",
+    "des iles environmental":                "Des Iles Environmental Solutions",
+    "divy construction":                     "Divy Construction",
+    "diqqa":                                 "DIQQA",
+    "dubai civil engineering & construction":"Dubai Civil Engineering",
+    "dubai civil engineering and construction":"Dubai Civil Engineering",
+    "dubai civil engineering":               "Dubai Civil Engineering",
+    "dubai civil":                           "Dubai Civil Engineering",
+
+    # ── E ────────────────────────────────────────────────────────────────────
+    "earth development pty ltd":             "Earth Development",
+    "earth development":                     "Earth Development",
+    "elvis labrosse":                        "Elvis Labrosse",
+    "era cleaning":                          "Era Cleaning",
+    "esparon builders":                      "Esparon Builders",
+    "excel motors":                          "Excel Motors",
+    "executive logistics":                   "Executive Logistics",
+    "executive motors":                      "Executive Motors",
+    "executive security service":            "Executive Security",
+    "executive security services":           "Executive Security",
+    "executive security":                    "Executive Security",
+    "express security agency":               "Express Security Agency",
+    "express security":                      "Express Security Agency",
+
+    # ── F ────────────────────────────────────────────────────────────────────
+    "fabs co construction ltd":              "FABS Co Construction",
+    "fabs co construction":                  "FABS Co Construction",
+    "fabs construction":                     "FABS Co Construction",
+    "fabs co":                               "FABS Co Construction",
+    "fair builders construction":            "Fair Builders Construction",
+    "fair builders":                         "Fair Builders Construction",
+    "fortress enterprise":                   "Fortress Enterprise",
+    "furui construction":                    "Furui Construction",
+
+    # ── G ────────────────────────────────────────────────────────────────────
+    "gc construction":                       "GC Construction",
+    "gibb seychelles":                       "GIBB Seychelles",
+    "gmb trading":                           "GMB Trading",
+    "gopinath builder (pty) ltd":            "Gopinath Builder Pty Ltd",
+    "gopinath builders (pty) ltd":           "Gopinath Builder Pty Ltd",
+    "gopinath builder pty ltd":              "Gopinath Builder Pty Ltd",
+    "gopinath builders pty ltd":             "Gopinath Builder Pty Ltd",
+    "gopinath builder":                      "Gopinath Builder Pty Ltd",
+    "gopinath builders":                     "Gopinath Builder Pty Ltd",
+    "green island construction":             "Green Island Construction",
+    "guard amour security":                  "Guard Amour Security",
+    "guard amour":                           "Guard Amour Security",
+
+    # ── H ────────────────────────────────────────────────────────────────────
+    "h & r new design & build":              "H & R New Design & Build",
+    "h and r new design and build":          "H & R New Design & Build",
+    "hari builders":                         "Hari Builders",
+    "henri fraise & fils":                   "Henri Fraise & Fils",
+    "henri fraise and fils":                 "Henri Fraise & Fils",
+    "hpc construction":                      "HPC Construction",
+
+    # ── I ────────────────────────────────────────────────────────────────────
+    "incontrol":                             "InControl",
+    "infinite waters cleanway services":     "Infinite Waters Cleanway",
+    "infinite waters cleanway":              "Infinite Waters Cleanway",
+    "interbuild ltd master builders":        "Interbuild Ltd",
+    "interbuild":                            "Interbuild Ltd",
+    "itech computer services":              "ITECH Computer Services",
+
+    # ── J ────────────────────────────────────────────────────────────────────
+    "j & j agency":                          "J & J Agency",
+    "j and j agency":                        "J & J Agency",
+    "jpm construction":                      "JPM Construction",
+
+    # ── K ────────────────────────────────────────────────────────────────────
+    "kingsgate electronic services":         "Kingsgate Electronic Services",
+
+    # ── L ────────────────────────────────────────────────────────────────────
+    "la digue island security":              "La Digue Island Security",
+    "ladouceur excavation":                  "Ladouceur Excavation",
+    "larj enterprise":                       "Larj Enterprise",
+
+    # ── M ────────────────────────────────────────────────────────────────────
+    "m & e maintenance":                     "M & E Maintenance",
+    "m and e maintenance":                   "M & E Maintenance",
+    "mana's cleaning agency":               "Mana's Cleaning Agency",
+    "marpol security":                       "Marpol Security",
+    "metaluco sey":                          "Metaluco Sey",
+    "mj construction":                       "MJ Construction",
+    "modern construction":                   "Modern Construction",
+    "music store":                           "Music Store",
+
+    # ── N ────────────────────────────────────────────────────────────────────
+    "nature solutions agency":               "Nature Solutions Agency",
+    "neils construction":                    "Neils Construction",
+
+    # ── O ────────────────────────────────────────────────────────────────────
+    "o nivo construction pty ltd":           "O Nivo Construction",
+    "o nivo construction":                   "O Nivo Construction",
+    "oceanlift pty ltd":                     "Oceanlift",
+    "oceanlift":                             "Oceanlift",
+
+    # ── P ────────────────────────────────────────────────────────────────────
+    "pintec press holding":                  "Pintec Press Holding",
+    "pintec press":                          "Pintec Press Holding",
+    "pro archives":                          "Pro Archives",
+    "pro-guard security":                    "Pro-Guard Security",
+    "pro guard security":                    "Pro-Guard Security",
+
+    # ── Q ────────────────────────────────────────────────────────────────────
+    "qingjian international":                "Qingjian International",
+
+    # ── R ────────────────────────────────────────────────────────────────────
+    "rafa builders":                         "Rafa Builders",
+    "reliance engineering services ltd":     "Reliance Engineering Services",
+    "reliance engineering services":         "Reliance Engineering Services",
+    "reliance engineering":                  "Reliance Engineering Services",
+    "rhs construction":                      "RHS Construction",
+    "royal security services":               "Royal Security Services",
+    "royal security":                        "Royal Security Services",
+
+    # ── S ────────────────────────────────────────────────────────────────────
+    "secure r u s":                          "Secure R U S",
+    "seychelles land transport agency":      "Seychelles Land Transport Agency",  # sometimes listed as winner for road surfacing
+    "sey-shells construction ltd":           "Seyshells Construction",
+    "seyshells construction ltd":            "Seyshells Construction",
+    "seyshells construction":                "Seyshells Construction",
+    "sey-shells construction":               "Seyshells Construction",
+    "sharp security agency":                 "Sharp Security Agency",
+    "sharp security":                        "Sharp Security Agency",
+    "shield security":                       "Shield Security",
+    "sport studio":                          "Sport Studio",
+    "storm alarm & security":                "Storm Alarm & Security",
+    "storm alarm and security":              "Storm Alarm & Security",
+    "storm alarm":                           "Storm Alarm & Security",
+    "stronghold security":                   "Stronghold Security",
+    "stronghold":                            "Stronghold Security",
+    "sulljet":                               "Sulljet",
+    "sun excavation pty ltd":                "Sun Excavation",
+    "sun excavation":                        "Sun Excavation",
+    "sun motors":                            "Sun Motors",
+    "sunny ocean ltd":                       "Sunny Ocean Ltd",
+    "sunny ocean":                           "Sunny Ocean Ltd",
+
+    # ── T ────────────────────────────────────────────────────────────────────
+    "taylor smith and co ltd":               "Taylor Smith",
+    "taylor smith & co ltd":                 "Taylor Smith",
+    "taylor smith":                          "Taylor Smith",
+    "tch pty ltd":                           "TCH Pty Ltd",
+    "tch":                                   "TCH Pty Ltd",
+    "ted construction":                      "TED Construction",
+    "thunder construction pty ltd":          "Thunder Construction",
+    "thunder construction ltd":              "Thunder Construction",
+    "thunder construction":                  "Thunder Construction",
+    "trl construction":                      "TRL Construction",
+    "turnkey solutions (sey) ltd":           "Turnkey Solutions",
+    "turnkey solutions sey ltd":             "Turnkey Solutions",
+    "turnkey solutions":                     "Turnkey Solutions",
+
+    # ── U ────────────────────────────────────────────────────────────────────
+    "unique engineering":                    "Unique Engineering",
+    "united concrete products":              "United Concrete Products",
+
+    # ── V ────────────────────────────────────────────────────────────────────
+    "vcs pty ltd":                           "VCS Pty Ltd",
+    "vcs computer services":                 "VCS Pty Ltd",
+    "victoria computer services":            "Victoria Computer Services",
+    "vijay construction":                    "Vijay Construction",
+
+    # ── W ────────────────────────────────────────────────────────────────────
+    "wellpoint development":                 "Wellpoint Development",
+    "wer construction":                      "WER Construction",
+    "woodshine project company":             "Woodshine Project Company",
+
+    # ── X ────────────────────────────────────────────────────────────────────
+    "xt design & build":                     "XT Design & Build",
+    "xt design and build":                   "XT Design & Build",
+    "xtreme security services":              "Xtreme Security Services",
+    "xtreme security":                       "Xtreme Security Services",
+    "xwo security":                          "XWO Security",
+
+    # ── Z ────────────────────────────────────────────────────────────────────
+    "all weather builders (sey) ltd":        "All Weather Builders",
+    "adams construction pty ltd":            "Adams Construction",
+    "am upkeep services":                    "AM Upkeep Services",
+    "greentech consultants":                 "Greentech Consultants",
+    "green tech consultants":                "Greentech Consultants",
+    "dean builders pty ltd":                 "Dean Builders",
+    "divy construction pty ltd":             "Divy Construction",
+}
+
+# ---------------------------------------------------------------------------
+# Legal suffix stripping — normalise before fuzzy comparison
+# e.g. "Gopinath Builder (Pty) Ltd" → "Gopinath Builder"
+# This dramatically improves fuzzy scores for suffix variants.
+# ---------------------------------------------------------------------------
+
+_SUFFIX_RE = re.compile(
+    r"""
+    \s*
+    (?:
+        \(pty\)[\s.]*ltd |   # (Pty) Ltd
+        \(pty\.?\)       |   # (Pty) or (Pty.)
+        pty[\s.]*ltd     |   # Pty Ltd
+        \(ltd\.?\)       |   # (Ltd) or (Ltd.)
+        \bltd\.?         |   # Ltd
+        \bco\.?\s*ltd\.? |   # Co. Ltd
+        \bco\.?          |   # Co.
+        \binc\.?         |   # Inc.
+        \bcorp\.?        |   # Corp.
+        \s+sey\.?        |   # Sey / Sey.  (suffix form)
+        \s+seychelles    |   # Seychelles (suffix)
+    )
+    \s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+def _strip_suffix(name: str) -> str:
+    """Remove legal entity suffixes for fuzzy comparison purposes only."""
+    prev = None
+    result = name.strip()
+    while result != prev:
+        prev = result
+        result = _SUFFIX_RE.sub("", result).strip(" ,.")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Core helpers (shared by both org and bidder normalisation)
 # ---------------------------------------------------------------------------
 
 def _normalise_key(name: str) -> str:
     """Lowercase, strip punctuation noise, collapse whitespace."""
     if not isinstance(name, str):
         return ""
-    # Unicode normalise
     name = unicodedata.normalize("NFKC", name)
-    # Lower
-    name = name.lower().strip()
-    # Remove leading/trailing punctuation noise
-    name = name.strip(" -–—*•·")
-    # Collapse multiple spaces
+    name = name.lower().strip().strip(" -–—*•·")
     name = re.sub(r"\s+", " ", name)
     return name
 
 
-def _apply_manual(raw: str) -> str | None:
-    """Return canonical if raw matches a manual override, else None."""
+def _apply_table(raw: str, table: dict[str, str]) -> str | None:
+    """Return canonical if raw matches the lookup table, else None."""
     key = _normalise_key(raw)
-    if key in MANUAL_OVERRIDES:
-        return MANUAL_OVERRIDES[key]
-    # Strip common prefixes and retry
+    if key in table:
+        return table[key]
     for prefix in ("the ", "govt. ", "government of seychelles - "):
         if key.startswith(prefix):
-            stripped = key[len(prefix):]
-            if stripped in MANUAL_OVERRIDES:
-                return MANUAL_OVERRIDES[stripped]
+            if key[len(prefix):] in table:
+                return table[key[len(prefix):]]
     return None
 
-# ---------------------------------------------------------------------------
-# Step 2 — Fuzzy clustering
-# ---------------------------------------------------------------------------
 
-def _fuzzy_cluster(names: list[str], counts: dict[str, int]) -> dict[str, str]:
+def _fuzzy_cluster(
+    names: list[str],
+    counts: dict[str, int],
+    threshold: int,
+    strip_suffix: bool = False,
+) -> dict[str, str]:
     """
-    Cluster name strings by fuzzy similarity.
-    Returns {name → canonical_name} for the whole set.
+    Cluster names by fuzzy similarity.
+    Returns {name → canonical_name}.
     Canonical = most frequent member of each cluster.
+    strip_suffix: if True, compare stripped forms but keep original as canonical.
     """
     if not FUZZY_AVAILABLE or not names:
         return {n: n for n in names}
 
-    # Sort by frequency descending so we anchor on the most-seen variant
     sorted_names = sorted(names, key=lambda n: -counts.get(n, 0))
-
     mapping: dict[str, str] = {}
-    canonical_pool: list[str] = []   # one representative per cluster
+    pool: list[str] = []         # canonical representatives
+    pool_stripped: list[str] = []  # stripped forms for comparison
 
     for name in sorted_names:
         if name in mapping:
-            continue   # already assigned
+            continue
 
-        if not canonical_pool:
-            canonical_pool.append(name)
+        name_cmp = _strip_suffix(name) if strip_suffix else name
+
+        if not pool:
+            pool.append(name)
+            pool_stripped.append(name_cmp)
             mapping[name] = name
             continue
 
-        # Compare against all existing cluster representatives
         best_match, best_score = fuzz_process.extractOne(
-            name, canonical_pool,
-            scorer=fuzz.token_sort_ratio,
+            name_cmp, pool_stripped, scorer=fuzz.token_sort_ratio
         )
+        idx = pool_stripped.index(best_match)
 
-        if best_score >= FUZZY_THRESHOLD:
-            # Assign to existing cluster — pick the more frequent as canonical
-            canonical = best_match
+        if best_score >= threshold:
+            canonical = pool[idx]
             if counts.get(name, 0) > counts.get(canonical, 0):
-                # This name is more frequent — it becomes the new canonical
-                canonical_pool[canonical_pool.index(best_match)] = name
-                # Re-map everything that pointed to old canonical
+                # Current name is more frequent — promote it
+                pool[idx] = name
+                pool_stripped[idx] = name_cmp
                 for k in list(mapping):
-                    if mapping[k] == best_match:
+                    if mapping[k] == canonical:
                         mapping[k] = name
                 canonical = name
             mapping[name] = canonical
         else:
-            # New cluster
-            canonical_pool.append(name)
+            pool.append(name)
+            pool_stripped.append(name_cmp)
             mapping[name] = name
 
     return mapping
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_org_mapping(
+def build_mapping(
     dataframes: list[pd.DataFrame],
-    log_path: str | None = "data/org_normalisation_log.csv",
+    col: str,
+    manual_table: dict[str, str],
+    threshold: int,
+    strip_suffix: bool = False,
+    log_path: str | None = None,
+    label: str = "names",
 ) -> dict[str, str]:
     """
-    Build a {raw_name → canonical_name} mapping from all DataFrames.
+    Generic mapping builder for any name column.
 
     Parameters
     ----------
-    dataframes  : list of DataFrames, each expected to have an 'org' column
-    log_path    : if set, write an audit CSV showing every mapping decision
+    dataframes    : list of DataFrames containing `col`
+    col           : column name to normalise (e.g. "org" or "winner")
+    manual_table  : lookup table of {lowercased_raw → canonical}
+    threshold     : fuzzy similarity threshold (0–100)
+    strip_suffix  : whether to strip legal suffixes before fuzzy comparison
+    log_path      : path to write audit CSV (None = skip)
+    label         : human label for print output
 
     Returns
     -------
-    dict mapping every raw org name seen → its canonical form
+    dict {raw_name → canonical_name}
     """
-    # Collect all raw org names + frequency counts
     all_names: list[str] = []
     for df in dataframes:
-        if df is not None and not df.empty and "org" in df.columns:
-            all_names.extend(df["org"].dropna().astype(str).tolist())
+        if df is not None and not df.empty and col in df.columns:
+            all_names.extend(df[col].dropna().astype(str).tolist())
 
     counts = Counter(all_names)
     unique_raw = [n for n in counts if len(n) >= MIN_NAME_LENGTH]
 
-    print(f"  Org normalisation: {len(unique_raw)} unique raw names found")
+    print(f"  {label}: {len(unique_raw)} unique raw names found")
 
-    # Pass 1 — manual overrides
     final_mapping: dict[str, str] = {}
     unresolved: list[str] = []
     log_rows: list[dict] = []
 
+    # Pass 1 — manual table
     for raw in unique_raw:
-        canonical = _apply_manual(raw)
+        canonical = _apply_table(raw, manual_table)
         if canonical:
             final_mapping[raw] = canonical
             log_rows.append({
-                "raw": raw,
-                "canonical": canonical,
-                "method": "manual",
-                "score": 100,
-                "frequency": counts[raw],
+                "col": col, "raw": raw, "canonical": canonical,
+                "method": "manual", "score": 100, "frequency": counts[raw],
             })
         else:
             unresolved.append(raw)
 
-    # Pass 2 — fuzzy clustering on the unresolved set
-    fuzzy_map = _fuzzy_cluster(unresolved, counts)
-
+    # Pass 2 — fuzzy clustering
+    fuzzy_map = _fuzzy_cluster(
+        unresolved, counts, threshold, strip_suffix=strip_suffix
+    )
     for raw, canonical in fuzzy_map.items():
         method = "fuzzy" if raw != canonical else "identity"
-        score  = fuzz.token_sort_ratio(raw, canonical) if FUZZY_AVAILABLE and raw != canonical else 100
+        score  = (fuzz.token_sort_ratio(_strip_suffix(raw), _strip_suffix(canonical))
+                  if FUZZY_AVAILABLE and raw != canonical else 100)
         final_mapping[raw] = canonical
         log_rows.append({
-            "raw": raw,
-            "canonical": canonical,
-            "method": method,
-            "score": score,
-            "frequency": counts[raw],
+            "col": col, "raw": raw, "canonical": canonical,
+            "method": method, "score": score, "frequency": counts[raw],
         })
 
-    # Summary
     n_merged = sum(1 for r in log_rows if r["raw"] != r["canonical"])
-    print(f"  Org normalisation: {n_merged} names merged "
+    print(f"  {label}: {n_merged} names merged "
           f"({len(unique_raw) - n_merged} remain distinct)")
 
-    # Write audit log
     if log_path and log_rows:
-        import os
         os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
-        log_df = pd.DataFrame(log_rows).sort_values(
-            ["method", "raw"], ascending=[False, True]
+        log_df = (
+            pd.DataFrame(log_rows)
+            .sort_values(["method", "raw"], ascending=[False, True])
         )
         log_df.to_csv(log_path, index=False, encoding="utf-8-sig")
-        print(f"  Audit log written → {log_path}")
+        print(f"  Audit log → {log_path}")
 
     return final_mapping
 
 
-def apply_org_mapping(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
-    """
-    Apply the org mapping to a DataFrame in-place (modifies 'org' column).
-    Returns the same DataFrame for chaining.
-    """
-    if df is None or df.empty or "org" not in df.columns:
-        return df
-    df["org"] = df["org"].astype(str).map(
-        lambda x: mapping.get(x, x)
+def build_org_mapping(
+    dataframes: list[pd.DataFrame],
+    log_path: str | None = "data/org_normalisation_log.csv",
+) -> dict[str, str]:
+    return build_mapping(
+        dataframes, col="org",
+        manual_table=MANUAL_OVERRIDES,
+        threshold=ORG_THRESHOLD,
+        strip_suffix=False,
+        log_path=log_path,
+        label="Org names",
     )
+
+
+def build_bidder_mapping(
+    dataframes: list[pd.DataFrame],
+    log_path: str | None = "data/bidder_normalisation_log.csv",
+) -> dict[str, str]:
+    """
+    Build a mapping for bidder/winner name columns.
+    Uses suffix-stripping before fuzzy comparison so "Builder (Pty) Ltd"
+    and "Builders Pty Ltd" compare as near-identical.
+    """
+    # Collect from both 'winner' (awarded/minutes) and 'bidder_name' columns
+    return build_mapping(
+        dataframes, col="winner",
+        manual_table=BIDDER_OVERRIDES,
+        threshold=BIDDER_THRESHOLD,
+        strip_suffix=True,
+        log_path=log_path,
+        label="Bidder names",
+    )
+
+
+def apply_mapping(
+    df: pd.DataFrame,
+    mapping: dict[str, str],
+    col: str,
+) -> pd.DataFrame:
+    """Apply a name mapping to a specific column in a DataFrame."""
+    if df is None or df.empty or col not in df.columns:
+        return df
+    df[col] = df[col].astype(str).map(lambda x: mapping.get(x, x))
     return df
 
 
 def normalise_all(
     dataframes: dict[str, pd.DataFrame],
-    log_path: str | None = "data/org_normalisation_log.csv",
+    org_log: str | None = "data/org_normalisation_log.csv",
+    bidder_log: str | None = "data/bidder_normalisation_log.csv",
 ) -> dict[str, pd.DataFrame]:
     """
-    Convenience wrapper: build mapping from all DFs, apply to all, return.
+    Normalise both org names and bidder/winner names across all DataFrames.
 
     Parameters
     ----------
-    dataframes : dict of {name → DataFrame}  e.g. from ntb_dashboard.combine()
-    log_path   : audit log output path
+    dataframes : dict {name → DataFrame} as returned by ntb_dashboard.combine()
+    org_log    : path for org audit CSV
+    bidder_log : path for bidder audit CSV
 
     Returns
     -------
-    Same dict with org columns normalised in place
+    Same dict, modified in place.
     """
     df_list = [df for df in dataframes.values() if df is not None and not df.empty]
-    mapping = build_org_mapping(df_list, log_path=log_path)
+
+    print("\n  Building org name mapping…")
+    org_mapping = build_org_mapping(df_list, log_path=org_log)
+
+    print("  Building bidder name mapping…")
+    bidder_mapping = build_bidder_mapping(df_list, log_path=bidder_log)
+
+    print("  Applying mappings…")
     for df in df_list:
-        apply_org_mapping(df, mapping)
+        apply_mapping(df, org_mapping, "org")
+        apply_mapping(df, bidder_mapping, "winner")
+        # Minutes uses 'bidder_name' in some versions
+        if "bidder_name" in df.columns:
+            apply_mapping(df, bidder_mapping, "bidder_name")
+
     return dataframes

@@ -30,6 +30,12 @@ from pathlib import Path
 
 import pandas as pd
 
+try:
+    from normalise_orgs import normalise_all
+    NORMALISE_AVAILABLE = True
+except ImportError:
+    NORMALISE_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -918,6 +924,13 @@ def build(data_dir: Path, out_dir: Path, pretty: bool = False):
     }
     for key, df in dfs.items():
         print(f"  {key:<12}: {len(df):,} rows")
+
+    # Normalise organisation names (fuzzy deduplication)
+    print("\nNormalising organisation names…")
+    if NORMALISE_AVAILABLE:
+        dfs = normalise_all(dfs, log_path=str(data_dir / "org_normalisation_log.csv"))
+    else:
+        print("  (skipped — normalise_orgs.py not found or thefuzz not installed)")
 
     # Date range
     date_from, date_to = extract_date_range(dfs)

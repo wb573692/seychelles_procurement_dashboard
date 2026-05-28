@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.eggs/
+*.egg-info/
+venv/
+.venv/
+env/
+
+# Scraped PDFs and HTML caches (large — run locally, don't commit)
+pdfs_awarded/
+pdfs_minutes/
+pdfs_advertised/
+ntb_pdfs/
+ntb_minutes_pdfs/
+ntb_eoi_pdfs/
+ntb_adv_pdfs/
+cache_eoi/
+cache_advertised/
+
+# Excel exports (generated on demand)
+*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# NOTE: data/*.csv ARE committed — GitHub Actions needs them to build the dashboard.
+# NOTE: docs/index.html IS committed — it IS the deployed site.

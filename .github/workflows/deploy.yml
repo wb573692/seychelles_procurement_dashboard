@@ -26,7 +26,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pandas
+        run: pip install pandas thefuzz python-Levenshtein
 
       - name: Build static dashboard
         run: python build.py --data-dir ./data --out ./docs

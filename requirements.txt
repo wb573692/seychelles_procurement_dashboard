@@ -11,3 +11,5 @@ lxml>=4.9.0
 # Data + dashboard build
 pandas>=2.0.0
 openpyxl>=3.1.0
+thefuzz>=0.22.0
+python-Levenshtein>=0.25.0   # makes thefuzz ~10x faster

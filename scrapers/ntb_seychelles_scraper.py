@@ -1,18 +1,3 @@
-"""
-NTB Seychelles Awarded Tenders Scraper
-=======================================
-Scrapes all awarded tender PDFs from https://www.ntb.sc/tenders/awarded-tenders,
-extracts SR-denominated contract data, and outputs a clean CSV + summary stats.
-
-Requirements:
-    pip install requests beautifulsoup4 pdfplumber pandas
-
-Usage:
-    python ntb_seychelles_scraper.py
-    python ntb_seychelles_scraper.py --out my_output.csv
-    python ntb_seychelles_scraper.py --pdf-dir ./pdfs --skip-download
-"""
-
 import re
 import io
 import time

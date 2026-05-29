@@ -356,6 +356,66 @@ def build_kpis(dfs: dict) -> dict:
     }
 
 
+def build_data_summary_html(dfs: dict) -> str:
+    """
+    Build an HTML snippet describing each dataset: row count, date range, notes.
+    Injected into DATA_SUMMARY_PLACEHOLDER in the template.
+    """
+    DATASET_META = {
+        "awarded": {
+            "label":    "Awarded Tenders",
+            "date_cols": ["period", "created_date"],
+            "note":     "SR contract values, winning bidders, procuring entities.",
+        },
+        "minutes": {
+            "label":    "Minutes of Tenders",
+            "date_cols": ["opening_date", "created_date"],
+            "note":     "All competing bids per tender opening — bidder names and prices.",
+        },
+        "eoi": {
+            "label":    "Expressions of Interest",
+            "date_cols": ["created_date", "submission_deadline"],
+            "note":     "EOI notices, limited bidding invitations, prequalifications.",
+        },
+        "advertised": {
+            "label":    "Advertised Tenders",
+            "date_cols": ["created_date", "submission_deadline"],
+            "note":     "Full tender notices with eligibility, deadlines, dossier fees.",
+        },
+    }
+
+    cards = []
+    for key, meta in DATASET_META.items():
+        df = dfs.get(key, pd.DataFrame())
+        if df.empty:
+            n_rows = 0
+            period_str = "No data"
+        else:
+            n_rows = len(df)
+            # Try to find earliest / latest date
+            dates = []
+            for col in meta["date_cols"]:
+                if col in df.columns:
+                    parsed = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+                    dates.extend(parsed.dropna().tolist())
+            if dates:
+                earliest = min(dates).strftime("%b %Y")
+                latest   = max(dates).strftime("%b %Y")
+                period_str = f"{earliest} – {latest}"
+            else:
+                period_str = "Period unknown"
+
+        cards.append(f"""
+      <div class="ds-card">
+        <div class="ds-card-title">{meta['label']}</div>
+        <div class="ds-card-rows">{n_rows:,} records retrieved</div>
+        <div class="ds-card-period">📅 {period_str}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:5px">{meta['note']}</div>
+      </div>""")
+
+    return "\n".join(cards)
+
+
 # ---------------------------------------------------------------------------
 # HTML template
 # ---------------------------------------------------------------------------
@@ -369,75 +429,72 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
 <style>
   :root {
-    --ocean:  #006994;
-    --lagoon: #00A896;
-    --sand:   #E8C84A;
-    --coral:  #E05A3A;
-    --palm:   #2D7A3A;
-    --muted:  #6B8FA3;
-    --ink:    #1A2B3C;
-    --bg:     #F5F9FA;
-    --white:  #FFFFFF;
-    --border: rgba(0,105,148,0.13);
+    --hero-bg:   #003B5C;
+    --body-bg:   #001F33;
+    --surface:   #002A45;
+    --surface2:  #00344F;
+    --teal:      #00A896;
+    --teal-dim:  #5DCAA5;
+    --teal-glow: rgba(0,168,150,0.2);
+    --aqua:      #378ADD;
+    --muted:     rgba(232,244,250,0.45);
+    --ink:       #E8F4FA;
+    --ink-dim:   rgba(232,244,250,0.65);
+    --border:    rgba(0,168,150,0.18);
+    --border2:   rgba(0,168,150,0.1);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background: var(--bg); color: var(--ink); font-size: 14px;
+    background: var(--body-bg); color: var(--ink); font-size: 14px;
   }
   .wrap { max-width: 1120px; margin: 0 auto; padding: 0 1.2rem 3rem; }
 
   /* Hero */
   .hero {
-    background: linear-gradient(135deg, #006994 0%, #00A896 50%, #2D7A3A 100%);
-    padding: 1.4rem 1.8rem; border-radius: 12px;
+    background: var(--hero-bg);
+    border-bottom: 2px solid var(--teal);
+    padding: 1.4rem 1.8rem;
     margin: 1rem 0 1.2rem;
-    display: flex; justify-content: space-between; align-items: center;
-    gap: 12px;
+    border-radius: 12px;
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
   }
-  .hero h1 { color: #fff; font-size: 21px; font-weight: 600; margin-bottom: 3px; }
-  .hero p  { color: rgba(255,255,255,0.72); font-size: 12px; }
+  .hero h1 { color: var(--ink); font-size: 21px; font-weight: 500; margin-bottom: 3px; }
+  .hero p  { color: var(--ink-dim); font-size: 12px; }
   .hero-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
   .hero-badge {
-    font-size: 11px; color: rgba(255,255,255,0.7);
-    background: rgba(255,255,255,0.12);
+    font-size: 11px; color: var(--teal-dim);
+    background: var(--teal-glow);
+    border: 0.5px solid rgba(0,168,150,0.3);
     padding: 3px 10px; border-radius: 20px; white-space: nowrap;
-  }
-  .date-range {
-    font-size: 11px; color: rgba(255,255,255,0.85);
-    background: rgba(255,255,255,0.15);
-    padding: 3px 10px; border-radius: 20px; white-space: nowrap;
-    font-weight: 500;
   }
 
   /* KPIs */
   .kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 1.2rem; }
   .kpi {
-    background: var(--white); border-radius: 10px;
-    border: 1px solid var(--border);
+    background: var(--surface); border-radius: 10px;
+    border: 0.5px solid var(--border);
     padding: 1rem 1.1rem; display: flex; align-items: center; gap: 12px;
-    box-shadow: 0 1px 4px rgba(0,105,148,0.07);
   }
-  .kpi-bar { width: 3px; border-radius: 2px; height: 36px; flex-shrink: 0; }
-  .kpi-label { font-size: 10px; color: var(--muted); font-weight: 500;
-                text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
-  .kpi-val   { font-size: 20px; font-weight: 600; color: var(--ink); line-height: 1.1; }
+  .kpi-bar { width: 3px; border-radius: 0; height: 36px; flex-shrink: 0; }
+  .kpi-label { font-size: 10px; color: var(--teal-dim); font-weight: 500;
+                text-transform: uppercase; letter-spacing: .05em; margin-bottom: 3px; }
+  .kpi-val   { font-size: 20px; font-weight: 500; color: var(--ink); line-height: 1.1; }
   .kpi-sub   { font-size: 10px; color: var(--muted); margin-top: 1px; }
 
   /* Sections */
   .sec {
-    border-left: 4px solid var(--lagoon); padding-left: 10px;
+    border-left: 3px solid var(--teal); padding-left: 10px;
     margin: 2rem 0 .8rem; display: flex; align-items: center; gap: 7px;
   }
-  .sec span { font-size: 12px; font-weight: 600; color: var(--ocean);
-               text-transform: uppercase; letter-spacing: .04em; }
-  .divider { height: 1px; background: rgba(0,168,150,0.18); margin: 1.4rem 0; }
+  .sec span { font-size: 11px; font-weight: 500; color: var(--teal-dim);
+               text-transform: uppercase; letter-spacing: .06em; }
+  .divider { height: 1px; background: var(--border2); margin: 1.4rem 0; }
 
   /* Chart cards */
   .card {
-    background: var(--white); border-radius: 10px;
-    border: 1px solid var(--border); padding: 1rem;
-    box-shadow: 0 1px 4px rgba(0,105,148,0.05);
+    background: var(--surface); border-radius: 10px;
+    border: 0.5px solid var(--border); padding: 1rem;
   }
   .row2  { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; }
   .row2b { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
@@ -446,11 +503,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th {
     padding: 7px 10px; text-align: left; font-size: 10px; font-weight: 600;
-    color: var(--ocean); border-bottom: 2px solid var(--lagoon);
-    background: var(--bg); text-transform: uppercase; letter-spacing: .04em;
+    color: var(--teal-dim); border-bottom: 1px solid var(--teal);
+    background: var(--surface2); text-transform: uppercase; letter-spacing: .05em;
   }
   td {
-    padding: 6px 10px; border-bottom: 1px solid rgba(0,105,148,0.08);
+    padding: 6px 10px; border-bottom: 1px solid var(--border2);
     color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     max-width: 280px;
   }
@@ -458,23 +515,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   /* Download panel */
   .dl-panel {
-    background: var(--white); border: 1px solid var(--border);
+    background: var(--surface); border: 0.5px solid var(--border);
     border-radius: 10px; padding: 1.2rem 1.4rem;
   }
   .dl-grid { display: grid; grid-template-columns: 2fr 2fr 1fr; gap: 16px; align-items: end; }
-  .dl-label { font-size: 10px; color: var(--muted); font-weight: 600;
-               text-transform: uppercase; letter-spacing: .04em; margin-bottom: 5px; }
+  .dl-label { font-size: 10px; color: var(--teal-dim); font-weight: 600;
+               text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
   .dl-select {
     font-size: 13px; padding: 7px 10px;
-    border: 1px solid rgba(0,105,148,0.25); border-radius: 8px;
-    background: var(--white); color: var(--ink); width: 100%;
+    border: 0.5px solid rgba(0,168,150,0.3); border-radius: 8px;
+    background: var(--surface2); color: var(--ink); width: 100%;
   }
   .fmt-row { display: flex; gap: 12px; margin-top: 4px; }
-  .fmt-row label { font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .fmt-row label { font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 4px; color: var(--ink-dim); }
   .dl-btn {
     width: 100%; padding: 9px;
-    background: linear-gradient(135deg, #006994, #00A896);
-    color: #fff; border: none; border-radius: 8px;
+    background: var(--teal);
+    color: #001F33; border: none; border-radius: 8px;
     font-size: 13px; font-weight: 600; cursor: pointer; letter-spacing: .02em;
   }
   .dl-btn:hover { opacity: .88; }
@@ -483,10 +540,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   /* Footer */
   .footer {
     text-align: center; font-size: 11px; color: var(--muted);
-    padding: 1.5rem 0 .5rem;
-    border-top: 1px solid rgba(0,168,150,0.15); margin-top: 2rem;
+    padding: 1rem 0 .5rem;
+    border-top: 1px solid var(--border2); margin-top: 1rem;
   }
-  .footer a { color: var(--ocean); text-decoration: none; }
+  .footer a { color: var(--teal-dim); text-decoration: none; }
+
+  /* Data summary */
+  .data-summary {
+    background: var(--surface); border-radius: 10px;
+    border: 0.5px solid var(--border);
+    padding: 1.2rem 1.4rem; margin-top: 1.5rem;
+  }
+  .ds-title {
+    font-size: 12px; font-weight: 500; color: var(--teal-dim);
+    text-transform: uppercase; letter-spacing: .06em;
+    margin-bottom: 1rem;
+  }
+  .ds-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px; margin-bottom: 1rem;
+  }
+  .ds-card {
+    background: var(--surface2); border-radius: 8px;
+    border: 0.5px solid var(--border2); padding: .8rem 1rem;
+  }
+  .ds-card-title {
+    font-size: 11px; font-weight: 600; color: var(--teal-dim);
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px;
+  }
+  .ds-card-rows { font-size: 12px; color: var(--ink); margin-bottom: 2px; }
+  .ds-card-period { font-size: 11px; color: var(--muted); }
+  .ds-note {
+    font-size: 11px; color: var(--muted); line-height: 1.6;
+    border-top: 1px solid var(--border2); padding-top: .7rem;
+  }
+  .ds-note a { color: var(--teal-dim); text-decoration: none; }
 
   @media (max-width: 700px) {
     .kpi-grid { grid-template-columns: repeat(2,1fr); }
@@ -506,7 +594,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <p>National Tender Board · Awarded · Minutes · EOI · Advertised</p>
     </div>
     <div class="hero-right">
-      <span class="date-range">📅 DATA_RANGE_PLACEHOLDER</span>
       <span class="hero-badge">ntb.sc · open data</span>
     </div>
   </div>
@@ -514,7 +601,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <!-- KPIs -->
   <div class="kpi-grid">
     <div class="kpi">
-      <div class="kpi-bar" style="background:#006994"></div>
+      <div class="kpi-bar" style="background:#00A896"></div>
       <div>
         <div class="kpi-label">Total SR awarded</div>
         <div class="kpi-val" id="kpi-sr"></div>
@@ -522,7 +609,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
     </div>
     <div class="kpi">
-      <div class="kpi-bar" style="background:#00A896"></div>
+      <div class="kpi-bar" style="background:#5DCAA5"></div>
       <div>
         <div class="kpi-label">Tender openings</div>
         <div class="kpi-val" id="kpi-tenders"></div>
@@ -530,7 +617,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
     </div>
     <div class="kpi">
-      <div class="kpi-bar" style="background:#E8C84A"></div>
+      <div class="kpi-bar" style="background:#378ADD"></div>
       <div>
         <div class="kpi-label">Expressions of interest</div>
         <div class="kpi-val" id="kpi-eoi"></div>
@@ -538,7 +625,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
     </div>
     <div class="kpi">
-      <div class="kpi-bar" style="background:#E05A3A"></div>
+      <div class="kpi-bar" style="background:#006994"></div>
       <div>
         <div class="kpi-label">Advertised tenders</div>
         <div class="kpi-val" id="kpi-adv"></div>
@@ -608,15 +695,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <label><input type="radio" name="fmt" value="csv" checked> CSV</label>
           <label><input type="radio" name="fmt" value="json"> JSON</label>
         </div>
-        <p style="font-size:11px;color:var(--muted);margin-top:6px">
-          Excel download available when running locally via <code>python build.py</code>.
-        </p>
       </div>
       <div>
         <button class="dl-btn" onclick="doDownload()">⬇ Download</button>
       </div>
     </div>
     <div class="dl-status" id="dl-status"></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Data summary -->
+  <div class="data-summary">
+    <h3 class="ds-title">📋 About this data</h3>
+    <div class="ds-grid">DATA_SUMMARY_PLACEHOLDER</div>
+    <p class="ds-note">
+      Data scraped from public records on <a href="https://ntb.sc" target="_blank">ntb.sc</a>.
+      Some historical PDF files are no longer accessible on the NTB server and are excluded.
+      All values are in Seychellois Rupees (SR) unless otherwise stated.
+    </p>
   </div>
 
   <div class="footer">
@@ -639,10 +736,12 @@ const PC = {
 const LAY_BASE = {
   paper_bgcolor: 'rgba(0,0,0,0)',
   plot_bgcolor:  'rgba(0,0,0,0)',
-  font: { family: 'Inter, sans-serif', size: 11, color: '#6B8FA3' },
+  font: { family: 'Inter, sans-serif', size: 11, color: 'rgba(232,244,250,0.55)' },
   margin: { t: 20, b: 50, l: 50, r: 20 },
 };
-const GRID_COLOR = 'rgba(0,120,130,0.1)';
+const GRID_COLOR = 'rgba(0,168,150,0.12)';
+const TICK_COLOR = 'rgba(232,244,250,0.55)';
+const LABEL_COLOR = 'rgba(232,244,250,0.85)';
 
 // ── KPIs ─────────────────────────────────────────────────────────────────────
 const K = DATA.kpis;
@@ -683,9 +782,9 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
     ...LAY_BASE,
     margin: { t: 10, b: 40, l: 150, r: 60 },
     xaxis: { gridcolor: GRID_COLOR, tickprefix: 'SR ', ticksuffix: 'M',
-             tickfont: { size: 10 }, fixedrange: true },
+             tickfont: { size: 10, color: TICK_COLOR }, fixedrange: true },
     yaxis: { autorange: 'reversed', gridcolor: 'rgba(0,0,0,0)',
-             tickfont: { size: 10, color: '#1A2B3C' }, fixedrange: true },
+             tickfont: { size: 10, color: LABEL_COLOR }, fixedrange: true },
   }, PC);
 })();
 
@@ -694,7 +793,7 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
   const d = DATA.top_winners;
   const n = d.length;
   const colors = d.map((_, i) =>
-    `rgba(${10+25*i}, ${100+8*i}, ${200-12*i}, 0.88)`
+    `rgba(0, ${130 + Math.round(100*(i/Math.max(n-1,1)))}, ${168 - Math.round(40*(i/Math.max(n-1,1)))}, 0.88)`
   );
   Plotly.newPlot('chart-winners', [{
     type: 'bar', orientation: 'h',
@@ -703,14 +802,15 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
     marker: { color: colors },
     text: d.map(r => `SR ${r.total_sr_m}M  (${r.n_contracts} contracts)`),
     textposition: 'outside',
+    textfont: { color: TICK_COLOR, size: 10 },
     hovertemplate: '<b>%{y}</b><br>SR %{x}M total<extra></extra>',
   }], {
     ...LAY_BASE,
     margin: { t: 10, b: 40, l: 220, r: 110 },
     xaxis: { gridcolor: GRID_COLOR, tickprefix: 'SR ', ticksuffix: 'M',
-             tickfont: { size: 10 }, fixedrange: true },
+             tickfont: { size: 10, color: TICK_COLOR }, fixedrange: true },
     yaxis: { autorange: 'reversed', gridcolor: 'rgba(0,0,0,0)',
-             tickfont: { size: 11, color: '#1A2B3C' }, fixedrange: true },
+             tickfont: { size: 11, color: LABEL_COLOR }, fixedrange: true },
   }, PC);
 })();
 
@@ -743,12 +843,12 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
   const shapes = [1,2,3,5,10,20].map(m => ({
     type: 'line', x0: m, x1: m, y0: 0, y1: 1,
     yref: 'paper',
-    line: { color: 'rgba(0,105,148,0.28)', width: 1, dash: 'dot' },
+    line: { color: 'rgba(0,168,150,0.3)', width: 1, dash: 'dot' },
   }));
   const annotations = [1,2,3,5,10,20].map(m => ({
     x: m, y: 1.02, yref: 'paper', xref: 'x',
     text: `SR ${m}M`, showarrow: false,
-    font: { size: 9, color: 'rgba(0,105,148,0.65)' },
+    font: { size: 9, color: 'rgba(0,168,150,0.65)' },
   }));
 
   Plotly.newPlot('chart-scatter', traces, {
@@ -763,7 +863,7 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
     yaxis: { visible: false, range: [0, 1], fixedrange: true },
     legend: {
       orientation: 'h', y: 1.08, x: 0,
-      font: { size: 10 }, itemsizing: 'constant',
+      font: { size: 10, color: TICK_COLOR }, itemsizing: 'constant',
     },
     hovermode: 'closest',
   }, PC);
@@ -775,14 +875,14 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
   Plotly.newPlot('chart-bids', [{
     type: 'bar',
     x: d.map(r => r.n.toString()), y: d.map(r => r.count),
-    marker: { color: 'rgba(0,168,150,0.7)', line: { color: '#00A896', width: 0.5 } },
+    marker: { color: 'rgba(0,168,150,0.65)', line: { color: '#5DCAA5', width: 0.5 } },
     hovertemplate: '%{y} tenders received %{x} bids<extra></extra>',
   }], {
     ...LAY_BASE,
     margin: { t: 10, b: 40, l: 40, r: 10 },
-    xaxis: { title: { text: 'Number of bids', font: { size: 11 } },
-             gridcolor: 'rgba(0,0,0,0)', tickfont: { size: 10 }, fixedrange: true },
-    yaxis: { gridcolor: GRID_COLOR, tickfont: { size: 10 }, fixedrange: true },
+    xaxis: { title: { text: 'Number of bids', font: { size: 11, color: TICK_COLOR } },
+             gridcolor: 'rgba(0,0,0,0)', tickfont: { size: 10, color: TICK_COLOR }, fixedrange: true },
+    yaxis: { gridcolor: GRID_COLOR, tickfont: { size: 10, color: TICK_COLOR }, fixedrange: true },
   }, PC);
 })();
 
@@ -793,7 +893,7 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
     const tr = document.createElement('tr');
     const name = r.bidder.length > 28 ? r.bidder.substring(0,26)+'…' : r.bidder;
     tr.innerHTML = `<td title="${r.bidder}">${name}</td>
-                    <td style="text-align:right;font-weight:600;color:#006994">${r.count}</td>`;
+                    <td style="text-align:right;font-weight:500;color:#5DCAA5">${r.count}</td>`;
     tbody.appendChild(tr);
   });
 })();
@@ -872,10 +972,6 @@ def build(data_dir: Path, out_dir: Path, pretty: bool = False):
     else:
         print("  (skipped — normalise_orgs.py not found or thefuzz not installed)")
 
-    # Date range
-    date_from, date_to = extract_date_range(dfs)
-    print(f"\n  Date range: {date_from} → {date_to}")
-
     # Build chart data
     print("\nBuilding chart data…")
     indent = 2 if pretty else None
@@ -913,12 +1009,13 @@ def build(data_dir: Path, out_dir: Path, pretty: bool = False):
         },
     }
 
-    data_json     = json.dumps(data, indent=indent, ensure_ascii=False)
+    data_json      = json.dumps(data, indent=indent, ensure_ascii=False)
     cat_color_json = json.dumps(CATEGORY_COLORS, indent=indent)
+    summary_html   = build_data_summary_html(dfs)
 
     # Inject into template
     html = HTML_TEMPLATE
-    html = html.replace("DATA_RANGE_PLACEHOLDER", f"{date_from} – {date_to}")
+    html = html.replace("DATA_SUMMARY_PLACEHOLDER", summary_html)
     html = html.replace("__DATA_JSON__", data_json)
     html = html.replace("__CAT_COLORS_JSON__", cat_color_json)
 

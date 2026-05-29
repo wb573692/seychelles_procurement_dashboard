@@ -6,7 +6,7 @@ An open-source, fully static procurement intelligence dashboard combining all fo
 
 ## Data sources
 
-All data is sourced from the National Tender Board Seychelles　web page.
+All data is sourced from the National Tender Board Seychelles web page.
 
 ## License
 

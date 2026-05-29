@@ -1,28 +1,3 @@
-"""
-build.py — NTB Seychelles Procurement Dashboard
-================================================
-Reads the four scraped CSVs from ./data/ and generates a fully
-self-contained ./docs/index.html that runs on GitHub Pages with
-zero server requirements.
-
-All chart data is embedded as JSON inside the HTML. The page uses
-Plotly.js (CDN) and plain JavaScript — no Python needed at runtime.
-
-Usage
------
-    python build.py                        # reads ./data/, writes ./docs/index.html
-    python build.py --data-dir ./my_data   # custom CSV directory
-    python build.py --out ./docs           # custom output directory
-    python build.py --pretty               # pretty-print embedded JSON (larger file)
-
-GitHub Pages setup
-------------------
-1. Push this repo to GitHub.
-2. Go to Settings → Pages → Source → Deploy from branch → main → /docs.
-3. Run: python build.py && git add docs/index.html && git commit -m "Rebuild dashboard" && git push
-4. Your dashboard is live at https://YOUR_USERNAME.github.io/REPO_NAME/
-"""
-
 import argparse
 import json
 import math
@@ -719,7 +694,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="footer">
     Data sourced from <a href="https://ntb.sc" target="_blank">ntb.sc</a> ·
     Independent open-source tool · Not affiliated with the NTB ·
-    <a href="https://github.com/YOUR_USERNAME/ntb-seychelles" target="_blank">GitHub</a>
+    <a href="https://github.com/wb573692/seychelles_procurement_dashboard" target="_blank">GitHub</a>
   </div>
 
 </div><!-- /wrap -->

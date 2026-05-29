@@ -456,16 +456,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   tr:nth-child(even) td { background: rgba(0,168,150,0.04); }
 
-  /* Org selector */
-  .org-select {
-    font-size: 13px; padding: 7px 12px; width: 100%; max-width: 440px;
-    border: 1px solid rgba(0,105,148,0.25); border-radius: 8px;
-    background: var(--white); color: var(--ink); margin-bottom: .9rem;
-  }
-  .org-stats { font-size: 13px; margin-bottom: .6rem; display: flex; gap: 16px; flex-wrap: wrap; }
-  .org-stat  { }
-  .org-stat strong { font-weight: 600; }
-
   /* Download panel */
   .dl-panel {
     background: var(--white); border: 1px solid var(--border);
@@ -596,13 +586,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </table>
     </div>
   </div>
-
-  <!-- Org deep dive -->
-  <div class="divider"></div>
-  <div class="sec"><span>🏛️</span><span>Organisation deep dive</span></div>
-  <select class="org-select" id="org-select" onchange="renderOrg(this.value)"></select>
-  <div class="org-stats" id="org-stats"></div>
-  <div class="card"><div id="chart-org-cats" style="height:180px"></div></div>
 
   <!-- Download -->
   <div class="divider"></div>
@@ -815,53 +798,6 @@ document.getElementById('kpi-orgs').textContent      = K.n_orgs + ' procuring en
   });
 })();
 
-// ── Organisation deep dive ────────────────────────────────────────────────────
-const ORG_STATS = DATA.org_stats;
-const ORG_LIST  = Object.keys(ORG_STATS).sort();
-const CAT_COLOR_MAP = __CAT_COLORS_JSON__;
-
-(function() {
-  const sel = document.getElementById('org-select');
-  ORG_LIST.forEach(org => {
-    const opt = document.createElement('option');
-    opt.value = org; opt.textContent = org;
-    sel.appendChild(opt);
-  });
-  if (ORG_LIST.length) renderOrg(ORG_LIST[0]);
-})();
-
-let orgCatChart = null;
-function renderOrg(org) {
-  const d = ORG_STATS[org] || {};
-  document.getElementById('org-stats').innerHTML = `
-    <span class="org-stat" style="color:#006994">Awarded: <strong>${d.awarded||0}</strong></span>
-    <span class="org-stat" style="color:#00A896">Minutes: <strong>${d.minutes||0}</strong></span>
-    <span class="org-stat" style="color:#C4992A">EOI: <strong>${d.eoi||0}</strong></span>
-    <span class="org-stat" style="color:#E05A3A">Advertised: <strong>${d.advertised||0}</strong></span>
-    <span class="org-stat" style="color:#1A2B3C">Total SR: <strong>SR ${d.total_sr_m||0}M</strong></span>
-  `;
-  const cats = Object.entries(d.cats || {});
-  const trace = [{
-    type: 'bar',
-    x: cats.map(([c]) => c), y: cats.map(([,v]) => v),
-    marker: { color: cats.map(([c]) => CAT_COLOR_MAP[c] || '#B4B2A9') },
-    hovertemplate: '<b>%{x}</b><br>%{y} contracts<extra></extra>',
-  }];
-  const layout = {
-    ...LAY_BASE,
-    margin: { t: 10, b: 60, l: 40, r: 10 },
-    xaxis: { gridcolor: 'rgba(0,0,0,0)', tickangle: -25,
-             tickfont: { size: 10, color: '#1A2B3C' }, fixedrange: true },
-    yaxis: { gridcolor: GRID_COLOR, tickfont: { size: 10 }, fixedrange: true },
-  };
-  if (orgCatChart) {
-    Plotly.react('chart-org-cats', trace, layout, PC);
-  } else {
-    Plotly.newPlot('chart-org-cats', trace, layout, PC);
-    orgCatChart = true;
-  }
-}
-
 // ── Download ──────────────────────────────────────────────────────────────────
 function doDownload() {
   const dataset = document.getElementById('dl-dataset').value;
@@ -968,7 +904,6 @@ def build(data_dir: Path, out_dir: Path, pretty: bool = False):
         "bunching_scatter":build_bunching_scatter(dfs["awarded"]),
         "bids_dist":       build_bids_dist(dfs["minutes"]),
         "top_bidders":     build_top_bidders(dfs["minutes"]),
-        "org_stats":       build_org_stats(dfs),
         "raw": {
             "master":     safe_records(master_df),
             "awarded":    safe_records(dfs["awarded"]),

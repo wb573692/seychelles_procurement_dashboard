@@ -1,38 +1,3 @@
-"""
-NTB Seychelles — Minutes of Tenders Scraper
-=============================================
-Crawls every pagination page of:
-    https://www.ntb.sc/tenders/minutes-of-tenders?start=X
-Downloads every linked PDF, parses the Minutes of Tender Opening format,
-and outputs a flat CSV (one row per bidder) plus an Excel workbook with
-summary sheets.
-
-PDF structure (consistent across all periods):
-    • Procuring entity  — in the header block
-    • Tender description — "TENDER FOR THE: ..."
-    • Opening date/time — "Date and Time of Tender Opening: ..."
-    • Bidder table rows: T1 / T2 / ... | NAME | CURRENCY | AMOUNT | (BID SECURITY)
-
-Requirements:
-    pip install requests beautifulsoup4 pdfplumber pandas openpyxl
-
-Usage:
-    # Full scrape (all 158+ pages, downloads every PDF)
-    python ntb_minutes_scraper.py
-
-    # Limit to first N listing pages (useful for testing)
-    python ntb_minutes_scraper.py --max-pages 3
-
-    # Re-parse already-downloaded PDFs without hitting the network
-    python ntb_minutes_scraper.py --skip-download --pdf-dir ./ntb_minutes_pdfs
-
-    # Only keep SR-denominated bids in the output
-    python ntb_minutes_scraper.py --sr-only
-
-    # Custom output paths
-    python ntb_minutes_scraper.py --out bids.csv --pdf-dir ./pdfs
-"""
-
 import re
 import time
 import argparse

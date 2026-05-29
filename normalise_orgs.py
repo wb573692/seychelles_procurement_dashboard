@@ -1,34 +1,3 @@
-"""
-normalise_orgs.py — Entity Name Normalisation (Orgs + Bidders)
-==============================================================
-Cleans and deduplicates both procuring entity names (org column)
-and bidder/winner names (winner / bidder_name columns) across all
-four NTB datasets using a two-pass approach:
-
-Pass 1 — Rule-based canonicalisation
-    Lookup tables of known abbreviations, typos, and variants.
-    Fast, deterministic, highest priority.
-
-Pass 2 — Fuzzy clustering
-    token_sort_ratio handles word-order differences ("Builder Gopinath"
-    vs "Gopinath Builder") and minor typos ("Builders" vs "Builder").
-    The most frequent name in each cluster becomes canonical.
-
-Audit logs are written to data/ so you can review every decision.
-
-Usage
------
-    from normalise_orgs import normalise_all
-
-    dfs = normalise_all(dfs)   # modifies org + winner columns in place
-
-Tuning
-------
-    ORG_THRESHOLD    (default 88) — fuzzy threshold for org names
-    BIDDER_THRESHOLD (default 85) — slightly lower; bidder names are messier
-    Add entries to MANUAL_OVERRIDES or BIDDER_OVERRIDES to fix mistakes.
-"""
-
 import os
 import re
 import unicodedata
